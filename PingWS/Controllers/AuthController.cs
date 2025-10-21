@@ -28,7 +28,7 @@ namespace ChatWS.Controllers
         }
 
         [HttpPost("login")]
-        public async Task<ActionResult<TokenResponseDto>> Login(UserDto request)
+        public async Task<ActionResult<LoginResponseDto>> Login(UserDto request)
         {
             var response = await authService.LoginAsync(request);
             if(response == null)

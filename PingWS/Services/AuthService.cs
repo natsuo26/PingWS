@@ -14,7 +14,7 @@ namespace PingWS.Services
 {
     public class AuthService(UserDbContext context, IConfiguration configuration) : IAuthService
     {
-        public async Task<TokenResponseDto?> LoginAsync(UserDto request)
+        public async Task<LoginResponseDto?> LoginAsync(UserDto request)
         {
 
             var user = await context.Users.FirstOrDefaultAsync(u => u.UserName == request.UserName);
@@ -28,7 +28,16 @@ namespace PingWS.Services
             {
                 return null;
             }
-            return await  CreateTokenResponse(user);
+
+            var tokenResponse = await CreateTokenResponse(user);
+            
+            return new LoginResponseDto() { 
+              Id= user.Id,
+              UserName= user.UserName,
+              Role = user.Role, 
+              AccessToken=tokenResponse.AccessToken,
+              RefreshToken=tokenResponse.RefreshToken
+            };
         }
 
         public async Task<User?> RegisterAsync(UserDto request)
@@ -52,9 +61,10 @@ namespace PingWS.Services
         {
             return new TokenResponseDto
             {
+                Id = user!.Id,
                 AccessToken = CreateToken(user),
                 RefreshToken = await GenerateAndSaveRefreshToken(user)
-            }; ;
+            } ;
         }
 
         public async Task<TokenResponseDto?> RefreshTokensAsync(RefreshTokenRequestDto request)

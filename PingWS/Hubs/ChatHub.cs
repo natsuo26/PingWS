@@ -1,14 +1,97 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using System.Collections.Concurrent;
+using System.Security.Claims;
 
 namespace ChatWS.Hubs
 {
+  [Authorize]
     public class ChatHub:Hub
     {
-        private static ConcurrentDictionary<string, string> ConnectedUsers = new();
-        private static ConcurrentDictionary<string, List<string>> Rooms = new();
+    private static ConcurrentDictionary<string, string> ConnectedUsers = new();
+    private static ConcurrentDictionary<Guid, string> UserConnections = new();
+    private static ConcurrentDictionary<string, List<string>> Rooms = new();
 
-        public async Task RegisterUser(string userName)
+    public override async Task OnConnectedAsync()
+    {
+        // Extract user info from JWT claims
+        var userId = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userName = Context.User?.FindFirst(ClaimTypes.Name)?.Value;
+
+        if (Guid.TryParse(userId, out var userGuid) && !string.IsNullOrEmpty(userName))
+        {
+            ConnectedUsers[Context.ConnectionId] = userName;
+            UserConnections[userGuid] = Context.ConnectionId;
+
+            await Clients.Caller.SendAsync("ReceiveMessage", "System", $"You are connected as {userName}!");
+
+            // Notify others that user is online (optional)
+            await Clients.Others.SendAsync("UserOnline", userGuid, userName);
+        }
+
+        await base.OnConnectedAsync();
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        var userId = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userName = ConnectedUsers.GetValueOrDefault(Context.ConnectionId);
+
+        // Clean up connections
+        ConnectedUsers.TryRemove(Context.ConnectionId, out _);
+
+        if (Guid.TryParse(userId, out var userGuid))
+        {
+            UserConnections.TryRemove(userGuid, out _);
+
+            // Notify others that user is offline (optional)
+            await Clients.Others.SendAsync("UserOffline", userGuid, userName);
+        }
+
+        // Remove from all rooms
+        foreach (var room in Rooms.ToList())
+        {
+            if (room.Value.Contains(Context.ConnectionId))
+            {
+                room.Value.Remove(Context.ConnectionId);
+                if (room.Value.Count == 0)
+                {
+                    Rooms.TryRemove(room.Key, out _);
+                }
+            }
+        }
+
+        await base.OnDisconnectedAsync(exception);
+    }
+
+    // Get current user's ID from JWT
+    private Guid GetCurrentUserId()
+    {
+        var userId = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return Guid.TryParse(userId, out var userGuid) ? userGuid : Guid.Empty;
+    }
+
+    public async Task SendDirectMessage(Guid recipientUserId, string message)
+    {
+        var currentUserId = GetCurrentUserId();
+        var senderUserName = Context.User?.FindFirst(ClaimTypes.Name)?.Value ?? "Unknown";
+
+        if (UserConnections.TryGetValue(recipientUserId, out var recipientConnectionId))
+        {
+            // Send to recipient
+            await Clients.Client(recipientConnectionId).SendAsync("ReceiveDirectMessage",
+                currentUserId, senderUserName, message, DateTime.UtcNow);
+
+            // Confirm to sender
+            await Clients.Caller.SendAsync("DirectMessageSent", recipientUserId, message, DateTime.UtcNow);
+        }
+        else
+        {
+            await Clients.Caller.SendAsync("ReceiveMessage", "System", "User is not online.");
+        }
+    }
+
+    public async Task RegisterUser(string userName)
         {
             ConnectedUsers[Context.ConnectionId] = userName;
             await Clients.Caller.SendAsync("ReceiveMessage","System", $"You are connected as {userName}!");
